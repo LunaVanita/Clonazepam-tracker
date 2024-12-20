@@ -1,0 +1,319 @@
+!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clonazepam Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@17.0.2/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@17.0.2/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.1.10/umd/Recharts.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, BarChart, Bar } = Recharts;
+
+    const ClonazepamTracker = () => {
+      const [doses, setDoses] = useState(() => {
+        const savedDoses = localStorage.getItem('clonazepamDoses');
+        return savedDoses ? JSON.parse(savedDoses) : [{ date: '', amount: '' }];
+      });
+      const [concentrationData, setConcentrationData] = useState([]);
+      const [activeTab, setActiveTab] = useState('primary');
+      
+      const HALF_LIFE_HOURS = 30;
+      const BIOAVAILABILITY = 0.9;
+      const PEAK_DELAY_HOURS = 1;
+
+      const addDose = () => {
+        if (doses.length < 15) {
+          const newDoses = [...doses, { date: '', amount: '' }];
+          setDoses(newDoses);
+          localStorage.setItem('clonazepamDoses', JSON.stringify(newDoses));
+        }
+      };
+
+      const removeDose = (index) => {
+        const newDoses = doses.filter((_, i) => i !== index);
+        const finalDoses = newDoses.length > 0 ? newDoses : [{ date: '', amount: '' }];
+        setDoses(finalDoses);
+        localStorage.setItem('clonazepamDoses', JSON.stringify(finalDoses));
+      };
+
+      const handleDoseChange = (index, field, value) => {
+        const newDoses = [...doses];
+        newDoses[index] = { ...newDoses[index], [field]: value };
+        setDoses(newDoses);
+        localStorage.setItem('clonazepamDoses', JSON.stringify(newDoses));
+      };
+
+      const calculateDailyAverages = (data) => {
+        const dailyData = [];
+        for (let i = 0; i < data.length; i += 24) {
+          const daySlice = data.slice(i, i + 24);
+          const avgConcentration = daySlice.reduce((sum, d) => sum + d.concentration, 0) / daySlice.length;
+          dailyData.push({
+            day: `Day ${Math.floor(i/24) + 1}`,
+            avgConcentration: parseFloat(avgConcentration.toFixed(2))
+          });
+        }
+        return dailyData;
+      };
+
+      const calculateConcentrations = () => {
+        const validDoses = doses.filter(dose => dose.date && dose.amount);
+        if (validDoses.length === 0) return;
+
+        const sortedDoses = validDoses.sort((a, b) => new Date(a.date) - new Date(b.date));
+        
+        const startDate = new Date(sortedDoses[0].date);
+        const endDate = new Date(sortedDoses[sortedDoses.length - 1].date);
+        endDate.setDate(endDate.getDate() + 7);
+
+        const hourlyData = [];
+        let currentDate = new Date(startDate);
+
+        while (currentDate <= endDate) {
+          let totalConcentration = 0;
+          const doseContributions = {};
+          
+          sortedDoses.forEach((dose, index) => {
+            const doseDate = new Date(dose.date);
+            const peakDate = new Date(doseDate);
+            peakDate.setHours(peakDate.getHours() + PEAK_DELAY_HOURS);
+            
+            if (doseDate <= currentDate) {
+              const hoursSincePeak = (currentDate - peakDate) / (1000 * 60 * 60);
+              
+              let contribution = 0;
+              if (hoursSincePeak >= 0) {
+                const bioavailableDose = parseFloat(dose.amount) * BIOAVAILABILITY;
+                contribution = bioavailableDose * Math.pow(0.5, hoursSincePeak / HALF_LIFE_HOURS);
+              } else {
+                const rampUpFraction = (currentDate - doseDate) / (1000 * 60 * 60) / PEAK_DELAY_HOURS;
+                const bioavailableDose = parseFloat(dose.amount) * BIOAVAILABILITY;
+                contribution = bioavailableDose * rampUpFraction;
+              }
+              
+              totalConcentration += contribution;
+              doseContributions[`dose${index + 1}`] = parseFloat(contribution.toFixed(2));
+            } else {
+              doseContributions[`dose${index + 1}`] = 0;
+            }
+          });
+
+          hourlyData.push({
+            date: currentDate.toISOString(),
+            concentration: parseFloat(totalConcentration.toFixed(2)),
+            ...doseContributions
+          });
+
+          currentDate.setHours(currentDate.getHours() + 1);
+        }
+
+        setConcentrationData(hourlyData);
+      };
+
+      useEffect(() => {
+        calculateConcentrations();
+      }, [doses]);
+
+      const getStackedColors = (count) => {
+        const colors = [
+          '#FFB6C1', '#FFC0CB', '#F08080', '#FF69B4', '#DB7093',
+          '#FFA07A', '#FF7F50', '#FF6347', '#FF4500', '#FF8C00',
+          '#FFA500', '#FFD700', '#FFDAB9', '#FFDEAD', '#FFEBCD'  
+        ];
+        return colors.slice(0, count);
+      };
+
+      return (
+        <div className="min-h-screen bg-pink-50 pb-24">
+          <div className="max-w-4xl mx-auto p-4">
+            <div className="flex gap-4 mb-8">
+              <div className="flex-grow bg-pink-100 p-4 rounded-lg shadow">
+                <h2 className="text-xl font-bold mb-2 text-gray-800">Clonazepam Properties</h2>
+                <ul className="space-y-1 text-gray-700 font-medium">
+                  <li>• Bioavailability: 90%</li>
+                  <li>• Time to Peak: 1 hour</li>
+                  <li>• Half-life: 30-40 hours</li>
+                  <li>• Steady State: 3-4 days</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="mb-8 bg-white p-6 rounded-lg shadow">
+              <h2 className="text-xl font-bold mb-4 text-gray-800">Enter Doses</h2>
+              {doses.map((dose, index) => (
+                <div key={index} className="flex mb-4 gap-4">
+                  <input
+                    type="datetime-local"
+                    value={dose.date}
+                    onChange={(e) => handleDoseChange(index, 'date', e.target.value)}
+                    className="flex-1 border p-2 rounded-lg text-gray-700"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Dose (mg)"
+                    value={dose.amount}
+                    onChange={(e) => handleDoseChange(index, 'amount', e.target.value)}
+                    className="w-32 border p-2 rounded-lg text-gray-700"
+                  />
+                  <button
+                    onClick={() => removeDose(index)}
+                    className="px-4 py-2 bg-red-50 rounded-lg text-red-500 font-medium"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              {doses.length < 15 && (
+                <button
+                  onClick={addDose}
+                  className="mt-2 px-4 py-2 bg-blue-50 rounded-lg text-blue-500 font-medium w-full"
+                >
+                  Add Dose
+                </button>
+              )}
+            </div>
+
+            {concentrationData.length > 0 && (
+              <div className="space-y-8">
+                <div className="bg-white p-6 rounded-lg shadow">
+                  <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+                    <button
+                      onClick={() => setActiveTab('primary')}
+                      className={`px-4 py-2 rounded-lg whitespace-nowrap font-medium ${activeTab === 'primary' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-800'}`}
+                    >
+                      Line Chart
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('area')}
+                      className={`px-4 py-2 rounded-lg whitespace-nowrap font-medium ${activeTab === 'area' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-800'}`}
+                    >
+                      Area Chart
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('stacked')}
+                      className={`px-4 py-2 rounded-lg whitespace-nowrap font-medium ${activeTab === 'stacked' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-800'}`}
+                    >
+                      Stacked Area
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('daily')}
+                      className={`px-4 py-2 rounded-lg whitespace-nowrap font-medium ${activeTab === 'daily' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-800'}`}
+                    >
+                      Daily Averages
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    {activeTab === 'primary' && (
+                      <div>
+                        <h3 className="text-lg font-bold mb-4 text-gray-800">Drug Concentration Over Time</h3>
+                        <LineChart width={800} height={400} data={concentrationData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="date" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Line type="monotone" dataKey="concentration" stroke="#8884d8" name="Concentration (mg)" />
+                        </LineChart>
+                      </div>
+                    )}
+
+                    {activeTab === 'area' && (
+                      <div>
+                        <h3 className="text-lg font-bold mb-4 text-gray-800">Drug Concentration Area Chart</h3>
+                        <AreaChart width={800} height={400} data={concentrationData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="date" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Area type="monotone" dataKey="concentration" stroke="#8884d8" fill="#8884d8" name="Concentration (mg)" />
+                        </AreaChart>
+                      </div>
+                    )}
+
+                    {activeTab === 'stacked' && (
+                      <div>
+                        <h3 className="text-lg font-bold mb-4 text-gray-800">Stacked Dose Contributions</h3>
+                        <AreaChart width={800} height={400} data={concentrationData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="date" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          {doses.filter(dose => dose.date && dose.amount).map((_, index) => (
+                            <Area
+                              key={index}
+                              type="monotone"
+                              dataKey={`dose${index + 1}`}
+                              stackId="1"
+                              stroke={getStackedColors(doses.length)[index]}
+                              fill={getStackedColors(doses.length)[index]}
+                              name={`Dose ${index + 1}`}
+                            />
+                          ))}
+                        </AreaChart>
+                      </div>
+                    )}
+
+                    {activeTab === 'daily' && (
+                      <div>
+                        <h3 className="text-lg font-bold mb-4 text-gray-800">Daily Average Concentrations</h3>
+                        <BarChart width={800} height={400} data={calculateDailyAverages(concentrationData)}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="day" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="avgConcentration" fill="#82ca9d" name="Daily Average (mg)" />
+                        </BarChart>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white p-6 rounded-lg shadow overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-gray-100 text-gray-800">
+                        <th className="text-left p-2 font-medium">Date/Time</th>
+                        <th className="text-right p-2 font-medium">Concentration (mg)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {concentrationData.map((data, index) => (
+                        <tr key={index} className="border-t">
+                          <td className="p-2 text-gray-700">{new Date(data.date).toLocaleString()}</td>
+                          <td className="text-right p-2 text-gray-700">{data.concentration}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            
+            <div className="mt-8 bg-white p-4 rounded-lg shadow">
+              <p className="text-gray-600 text-sm">
+                Made with Claude. Artifacts are user-generated and may contain unverified or potentially unsafe content.
+              </p>
+              <button className="mt-2 px-4 py-2 bg-orange-100 text-orange-800 rounded-lg font-medium">
+                Remix Artifact
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<ClonazepamTracker />, document.getElementById('root'));
+  </script>
+</body>
+</html>
